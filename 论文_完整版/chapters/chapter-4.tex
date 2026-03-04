@@ -448,7 +448,7 @@ L2 正则化项为
 
 \subsection{评估设置}
 
-本文将 HRGNN 与涵盖传统 GNN、双曲方法和路网专用架构的全面基线方法集合进行对比，以确保严格的性能评估。
+本文将 HRGNN 与涵盖传统 GNN、双曲方法和路网专用架构的全面基线方法集合进行对比，以确保严格的性能评估。图神经网络从 Scarselli 等\cite{scarselli2009gnn} 的开创性工作发展至 Gilmer 等\cite{gilmer2017mpnn} 的消息传递统一框架，已形成丰富的架构体系，可参阅\cite{ma2022gnn_survey_cn,xu2020gcn_survey_cn}对其系统性综述。
 
 \begin{enumerate}
 \item \textbf{基础 GNN。} 对比中包含四种代表图表示学习演进历程的基础 GNN 架构。图卷积网络（GCN）作为谱域方法的基础，利用归一化图拉普拉斯进行邻居聚合 \cite{Kipf2017}。GraphSAGE 提供通过采样和聚合局部邻居特征生成节点嵌入的归纳框架 \cite{Hamilton2017}。图注意力网络（GAT）在聚合过程中引入注意力机制，动态加权邻居重要性 \cite{Velickovic2018}。图同构网络（GIN）通过 MLP 建模单射多重集函数，为邻居聚合提供理论保障 \cite{Xu2019}。

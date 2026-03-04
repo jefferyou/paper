@@ -45,7 +45,7 @@ HHRoad 由五个核心组件构成：
 
 \textbf{（5）层次对比学习}在路段层内以拓扑相邻路段为正对、跨层以路段与其父级局部区域为正对，分别通过 InfoNCE 损失强化嵌入空间中的局部语义聚类和跨层次关联。
 
-总训练损失由结构重构损失 $\mathcal{L}_{\text{struct}}$、轨迹重构损失 $\mathcal{L}_{\text{traj}}$、蕴含损失 $\mathcal{L}_{\text{CE}}$ 和对比损失 $\mathcal{L}_{\text{CC}}$ 的加权和构成（详见第~\ref{sec:loss} 节）。以下依次阐述各组件的具体设计。
+总训练损失由道路功能分类损失 $\mathcal{L}_{\text{cls}}$、蕴含损失 $\mathcal{L}_{\text{CE}}$ 和对比损失 $\mathcal{L}_{\text{CC}}$ 的加权和构成（详见第~\ref{sec:loss} 节）。以下依次阐述各组件的具体设计。
 
 \subsection{双曲嵌入层}
 
@@ -75,20 +75,27 @@ HHRoad 由五个核心组件构成：
 
 由于 Lorentz 双曲面是弯曲流形，直接在流形上做加权平均不满足封闭性（加权组合不一定仍在 $\mathbb{L}^n$ 上）。HHRoad 采用"对数映射 $\to$ 切空间加权平均 $\to$ 指数映射"的三步聚合策略：首先将子级嵌入通过对数映射投影到 Lorentz 原点 $\mathbf{o} = (\sqrt{1/\kappa}, 0, \ldots, 0)^\top$ 处的切空间 $\mathcal{T}_\mathbf{o}\mathbb{L}^n$，在该切空间（作为欧氏空间）中执行加权平均，最后通过指数映射将结果投影回流形。
 
-局部区域嵌入 $\mathbf{h}_{c_j}$ 由路段嵌入聚合得到：
-\begin{equation}
-    \mathbf{h}_{c_j}^{\text{tan}} = \sum_{i=1}^{|\mathcal{S}|} [\mathbf{A}_{SC}]_{ij} \cdot \log_{\mathbf{o}}^\kappa(\mathbf{h}_i), \quad \mathbf{h}_{c_j} = \exp_{\mathbf{o}}^\kappa(\mathbf{h}_{c_j}^{\text{tan}})
-    \label{eq:locality_agg}
-\end{equation}
-其中 $\log_{\mathbf{o}}^\kappa(\cdot)$ 为 Lorentz 原点处的对数映射，$\exp_{\mathbf{o}}^\kappa(\cdot)$ 为原点处的指数映射（具体公式见第三章 3.2.3 节），$[\mathbf{A}_{SC}]_{ij}$ 为路段 $v_i$ 对局部区域 $c_j$ 的赋值权重。
+局部区域嵌入 $\mathbf{h}_{c_j}$ 由路段嵌入聚合得到。具体地，对每个局部区域 $c_j$（$j = 1, \dots, |\mathcal{C}|$），首先将路段嵌入映射至切空间并执行加权平均，然后通过指数映射投影回流形，并引入\textbf{范数保持因子} $\rho \in (0,1]$ 对空间范数进行重新缩放：
+\begin{align}
+    \tilde{\mathbf{h}}_i &= \log_{\mathbf{o}}^\kappa(\mathbf{h}_i), \quad i = 1, \dots, |\mathcal{S}|, \label{eq:seg_to_tangent} \\[3pt]
+    \bar{\mathbf{t}}_{c_j} &= \sum_{i=1}^{|\mathcal{S}|} [\mathbf{A}_{SC}]_{ij} \cdot \tilde{\mathbf{h}}_i, \label{eq:tangent_mean_loc} \\[3pt]
+    \mathbf{h}_{c_j} &= \text{Proj}_{\mathbb{L}}\!\left(
+      \rho \cdot \frac{\|\bar{\mathbf{t}}_{c_j}^s\|}{\|\exp_{\mathbf{o}}^\kappa(\bar{\mathbf{t}}_{c_j})^s\|}
+      \cdot \exp_{\mathbf{o}}^\kappa(\bar{\mathbf{t}}_{c_j})^s
+    \right), \label{eq:locality_agg}
+\end{align}
+其中 $\log_{\mathbf{o}}^\kappa(\cdot)$ 为 Lorentz 原点处的对数映射，$\exp_{\mathbf{o}}^\kappa(\cdot)$ 为原点处的指数映射（具体公式见第三章 3.2.3 节），上标 $s$ 表示提取空间分量（去除时间分量 $h_0$），$[\mathbf{A}_{SC}]_{ij}$ 为路段 $v_i$ 对局部区域 $c_j$ 的赋值权重。范数保持因子 $\rho$（设为 $0.8$）的引入是关键设计：由于负曲率空间中的 Fréchet 均值会向原点收缩，直接在切空间中求加权平均会导致局部区域嵌入塌缩至原点附近。通过保留预期空间范数的 $\rho$ 比例，既维持了表示容量，又允许可控的范数递减以反映局部区域相对路段的粗粒度特征。
 
-功能区嵌入 $\mathbf{h}_{r_k}$ 类似地从局部区域嵌入聚合得到：
-\begin{equation}
-    \mathbf{h}_{r_k}^{\text{tan}} = \sum_{j=1}^{|\mathcal{C}|} [\mathbf{A}_{CR}]_{jk} \cdot \log_{\mathbf{o}}^\kappa(\mathbf{h}_{c_j}), \quad \mathbf{h}_{r_k} = \exp_{\mathbf{o}}^\kappa(\mathbf{h}_{r_k}^{\text{tan}})
-    \label{eq:region_agg}
-\end{equation}
+功能区嵌入 $\mathbf{h}_{r_k}$ 以相同方式从局部区域嵌入聚合得到，使用功能赋值矩阵 $\mathbf{A}_{CR}$：
+\begin{align}
+    \bar{\mathbf{t}}_{r_k} &= \sum_{j=1}^{|\mathcal{C}|} [\mathbf{A}_{CR}]_{jk} \cdot \log_{\mathbf{o}}^\kappa(\mathbf{h}_{c_j}), \label{eq:tangent_mean_reg} \\[3pt]
+    \mathbf{h}_{r_k} &= \text{Proj}_{\mathbb{L}}\!\left(
+      \rho \cdot \frac{\|\bar{\mathbf{t}}_{r_k}^s\|}{\|\exp_{\mathbf{o}}^\kappa(\bar{\mathbf{t}}_{r_k})^s\|}
+      \cdot \exp_{\mathbf{o}}^\kappa(\bar{\mathbf{t}}_{r_k})^s
+    \right). \label{eq:region_agg}
+\end{align}
 
-这一自底向上的两级聚合完成后，模型获得了三层层次嵌入：路段嵌入 $\{\mathbf{h}_i\}_{i=1}^{|\mathcal{S}|}$、局部区域嵌入 $\{\mathbf{h}_{c_j}\}_{j=1}^{|\mathcal{C}|}$ 和功能区嵌入 $\{\mathbf{h}_{r_k}\}_{k=1}^{|\mathcal{R}|}$，三者均位于同一 Lorentz 空间 $\mathbb{L}^n$ 中。由于聚合过程涉及多次加权平均，高层嵌入的空间范数（$\|\tilde{\mathbf{h}}\|$，即除去时间分量后的欧氏范数）倾向于小于底层嵌入的范数，即功能区嵌入自然靠近 Lorentz 原点、路段嵌入远离原点。这一范数递减特性与蕴含锥的层次语义一致——靠近原点的点具有更宽的蕴含锥（代表更一般的概念），为后续蕴含约束提供了良好的几何初始条件。
+这一自底向上的两级聚合完成后，模型获得了三层层次嵌入：路段嵌入 $\{\mathbf{h}_i\}_{i=1}^{|\mathcal{S}|}$、局部区域嵌入 $\{\mathbf{h}_{c_j}\}_{j=1}^{|\mathcal{C}|}$ 和功能区嵌入 $\{\mathbf{h}_{r_k}\}_{k=1}^{|\mathcal{R}|}$，三者均位于同一 Lorentz 空间 $\mathbb{L}^n$ 中。由于聚合过程涉及加权平均并经范数保持因子缩放，高层嵌入的空间范数（$\|\tilde{\mathbf{h}}^s\|$，即除去时间分量后的欧氏范数）系统性地小于底层嵌入的范数，即功能区嵌入自然靠近 Lorentz 原点、路段嵌入远离原点。这一范数递减特性与蕴含锥的层次语义一致——靠近原点的点具有更宽的蕴含锥（代表更一般的概念），为后续蕴含约束提供了良好的几何初始条件。
 
 \subsection{自顶向下双曲消息传递}
 \label{sec:message_passing}
@@ -99,61 +106,220 @@ HHRoad 由五个核心组件构成：
 
 HHRoad 采用五步自顶向下传播方案，依次执行以下操作。
 
-\textbf{R2R（功能区间消息传递）：}功能区之间通过双曲图卷积交换信息。由于功能区数量较少（$|\mathcal{R}|=30$）且缺乏预定义的拓扑连接，HHRoad 通过功能区嵌入之间的双曲亲和度矩阵动态构建邻接关系：
+\textbf{R2R（功能区间消息传递）：}功能区之间通过 HGC 交换信息。由于功能区数量较少（$|\mathcal{R}|=30$）且缺乏预定义的拓扑连接，HHRoad 通过功能区嵌入之间的双曲亲和度矩阵动态构建邻接关系：
 \begin{equation}
-    [\mathbf{W}_R]_{kl} = \exp\left(-d_{\mathbb{L}}(\mathbf{h}_{r_k}, \mathbf{h}_{r_l})\right) + \delta_{kl}
+    \alpha_{kl} = \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_{r_k}, \mathbf{h}_{r_l})\right),
+    \label{eq:region_affinity}
 \end{equation}
-其中 $d_{\mathbb{L}}(\cdot, \cdot)$ 为 Lorentz 距离，$\delta_{kl}$ 为自环项。在此亲和度矩阵上施加双曲图卷积（具体机制见下文），更新功能区嵌入。
+其中 $d_{\mathbb{L}}(\cdot, \cdot)$ 为 Lorentz 距离。在此亲和度矩阵（附加自环）上施加 HGC，更新功能区嵌入：
+\begin{equation}
+    \mathbf{H}^{\text{reg}} \leftarrow \text{HGC}_{\text{reg}}\!\left(\mathbf{H}^{\text{reg}},\, \boldsymbol{\alpha} + \mathbf{I}\right).
+    \label{eq:r2r}
+\end{equation}
 
-\textbf{R2C（功能区向局部区域分发）：}将更新后的功能区嵌入通过赋值矩阵 $\mathbf{A}_{CR}$ 反向分发至局部区域。分发过程在切空间中进行：对每个局部区域 $c_j$，将其所属功能区的嵌入通过对数映射投影至切空间，以 $\mathbf{A}_{CR}$ 的转置行为权重加权平均后，经指数映射投影回流形，得到来自功能区的消息向量。随后通过门控机制融合原始局部区域嵌入与功能区消息：
-\begin{equation}
-    \mathbf{m}_{c_j}^{R} = \exp_{\mathbf{o}}^\kappa\left(\sum_{k} [\mathbf{A}_{CR}]_{jk} \cdot \log_{\mathbf{o}}^\kappa(\mathbf{h}_{r_k}')\right)
-\end{equation}
-\begin{equation}
-    \mathbf{h}_{c_j} \leftarrow \text{HypUpdate}(\mathbf{h}_{c_j},\ \mathbf{m}_{c_j}^{R},\ \alpha_1)
-\end{equation}
-其中 $\mathbf{h}_{r_k}'$ 为 R2R 步骤更新后的功能区嵌入，$\text{HypUpdate}$ 为双曲更新操作（定义见下文），$\alpha_1$ 为融合权重。
+\textbf{R2C（功能区向局部区域分发）：}将更新后的功能区嵌入通过赋值矩阵 $\mathbf{A}_{CR}$ 反向分发至局部区域。分发过程在切空间中进行：对每个局部区域 $c_j$，将其所属功能区的嵌入通过对数映射投影至切空间，以赋值权重加权平均后，经指数映射投影回流形（引入范数保持因子 $\rho'$），得到来自功能区的消息向量。随后通过门控双曲插值融合原始局部区域嵌入与功能区消息（具体公式见式~(\ref{eq:f2c_msg})--(\ref{eq:gate_loc})）。
 
-\textbf{C2C（局部区域间消息传递）：}融合了功能区语义的局部区域嵌入在局部区域邻接图上通过双曲图卷积进一步交换信息。局部区域邻接矩阵由路段邻接矩阵与赋值矩阵诱导得到：$\mathbf{W}_C = \mathbf{A}_{SC}^\top \mathbf{A}_{\text{adj}} \mathbf{A}_{SC}$，其中 $\mathbf{A}_{\text{adj}}$ 为路段邻接矩阵。
-
-\textbf{C2S（局部区域向路段分发）：}更新后的局部区域嵌入通过 $\mathbf{A}_{SC}$ 反向分发至路段。操作方式与 R2C 类似：
+\textbf{C2C（局部区域间消息传递）：}融合了功能区语义的局部区域嵌入在局部区域邻接图上通过 HGC 进一步交换信息：
 \begin{equation}
-    \mathbf{m}_{i}^{C} = \exp_{\mathbf{o}}^\kappa\left(\sum_{j} [\mathbf{A}_{SC}]_{ij} \cdot \log_{\mathbf{o}}^\kappa(\mathbf{h}_{c_j}')\right)
+    \mathbf{H}^{\text{loc}} \leftarrow \text{HGC}_{\text{loc}}\!\left(\mathbf{H}^{\text{loc}},\, \mathbf{A}^{\text{loc}}\right),
+    \label{eq:c2c}
 \end{equation}
-\begin{equation}
-    \mathbf{h}_{i} \leftarrow \text{HypUpdate}(\mathbf{h}_{i},\ \mathbf{m}_{i}^{C},\ \alpha_2)
-\end{equation}
-其中 $\mathbf{h}_{c_j}'$ 为 C2C 步骤更新后的局部区域嵌入。
+其中局部区域邻接矩阵由路段邻接矩阵与赋值矩阵诱导得到：$\mathbf{A}^{\text{loc}} = \mathbf{A}_{SC}^\top \mathbf{A}_{\text{adj}} \mathbf{A}_{SC}$，$\mathbf{A}_{\text{adj}}$ 为路段邻接矩阵。
 
-\textbf{S2S（路段间消息传递）：}最后，融合了全部上层语义的路段嵌入在路段邻接图上通过双曲图卷积进行局部拓扑信息交换。
+\textbf{C2S（局部区域向路段分发）：}更新后的局部区域嵌入通过 $\mathbf{A}_{SC}$ 反向分发至路段，操作方式与 R2C 类似，使用独立的门控参数（具体公式见式~(\ref{eq:c2s_msg})--(\ref{eq:gate_seg})）。
+
+\textbf{S2S（路段间消息传递）：}最后，融合了全部上层语义的路段嵌入在路段邻接图上通过 HGC 进行局部拓扑信息交换：
+\begin{equation}
+    \mathbf{H}^{\text{seg}} \leftarrow \text{HGC}_{\text{seg}}\!\left(\mathbf{H}^{\text{seg}},\, \mathbf{A}\right).
+    \label{eq:s2s}
+\end{equation}
 
 五步传播方案整体上实现了全局功能区语义通过两跳层次路径（功能区 $\to$ 局部区域 $\to$ 路段）高效到达每条路段，避免了标准扁平 GNN 在大规模路网上因长距离消息传递导致的信息耗散和过压缩问题\cite{topping2022oversquashing}。
 
 \subsubsection{双曲图卷积}
 
-上述传播方案中的层次内消息传递（R2R、C2C、S2S）均通过双曲图卷积实现。对层次内节点 $i$ 及其邻居集合 $\mathcal{N}(i)$，双曲图卷积\cite{chami2019hgcn,liu2019hgnn} 采用"切空间聚合"策略：首先通过零点对数映射将嵌入投影至切空间，在切空间中执行邻居聚合和线性变换（均为标准欧氏操作），最后通过零点指数映射投影回流形：
-\begin{equation}
-    \tilde{\mathbf{h}}_i = \log_{\mathbf{o}}^{\kappa}(\mathbf{h}_i) \in \mathcal{T}_\mathbf{o}\mathbb{L}^n, \quad i = 1, \ldots, N
-\end{equation}
-\begin{equation}
-    \bar{\mathbf{h}}_i = \sum_{j \in \mathcal{N}(i)} \frac{1}{|\mathcal{N}(i)|} \tilde{\mathbf{h}}_j
-\end{equation}
-\begin{equation}
-    \mathbf{h}_i' = \text{Proj}_{\mathbb{L}}\left(\exp_{\mathbf{o}}^{\kappa}\left(\sigma(\mathbf{W}\bar{\mathbf{h}}_i + \mathbf{b})\right)\right)
-    \label{eq:hyp_gcn}
-\end{equation}
-其中 $\mathbf{W} \in \mathbb{R}^{n \times n}$ 和 $\mathbf{b} \in \mathbb{R}^{n}$ 为可学习参数，$\sigma(\cdot)$ 为非线性激活函数，$\text{Proj}_{\mathbb{L}}(\cdot)$ 通过补全时间分量 $h_0 = \sqrt{1/\kappa + \|\mathbf{z}\|^2}$ 将空间分量投影回 Lorentz 流形。
+上述传播方案中的层次内消息传递（R2R、C2C、S2S）均通过双曲图卷积（Hyperbolic Graph Convolution, HGC）实现。由于 Lorentz 流形是非线性的，标准图卷积无法直接在双曲空间中应用。HGC\cite{chami2019hgcn,liu2019hgnn} 采用\textbf{切空间策略}：将特征映射到原点 $\mathbf{o}$ 处的切空间，在切空间中执行线性邻域聚合，最后将结果映射回流形。具体地，给定双曲节点特征 $\{\mathbf{h}_i\} \subset \mathbb{L}^n$ 和邻接矩阵 $\mathbf{A}$，单层 HGC 包含以下四个步骤：
 
-\subsubsection{双曲更新操作}
-
-跨层分发步骤（R2C、C2S）中，节点需要融合自身嵌入 $\mathbf{h}$ 和来自父级的消息 $\mathbf{m}$。HHRoad 通过切空间插值实现这一融合：
+\paragraph{步骤一：映射至切空间。} 对每个节点 $i$，提取空间分量 $\mathbf{h}_i^s = (h_{i,1}, \dots, h_{i,n})$ 并通过原点处的对数映射计算切空间表示：
 \begin{equation}
-    \text{HypUpdate}(\mathbf{h}, \mathbf{m}, \alpha) = \exp_{\mathbf{h}}^\kappa\left(\alpha \cdot \log_{\mathbf{h}}^\kappa(\mathbf{m})\right)
-    \label{eq:hyp_update}
+    \tilde{\mathbf{h}}_i = \log_{\mathbf{o}}^{\kappa}(\mathbf{h}_i^s)
+    = \frac{\text{artanh}(\|\mathbf{h}_i^s\|)}{\|\mathbf{h}_i^s\|} \mathbf{h}_i^s
+    \in \mathbb{R}^{n}.
+    \label{eq:hgc_log}
 \end{equation}
-即首先计算从 $\mathbf{h}$ 指向 $\mathbf{m}$ 的切向量 $\log_{\mathbf{h}}^\kappa(\mathbf{m})$，然后以 $\alpha$ 作为步长沿该方向在流形上移动。当 $\alpha=0$ 时保持原嵌入不变，当 $\alpha=1$ 时完全移动到消息位置。HHRoad 在 R2C 步骤中设 $\alpha_1=0.15$（功能区语义的影响应较为温和），在 C2S 步骤中设 $\alpha_2=0.5$（局部区域与路段的语义耦合更紧密）。
 
-经过两层层次消息传递编码器的堆叠（每层均执行完整的五步传播），HHRoad 输出最终的路段双曲嵌入 $\mathbf{H}^{(\text{final})} \in \mathbb{R}^{|\mathcal{S}| \times (n+1)}$，每条路段的嵌入融合了局部拓扑、所属局部区域和功能区的多层次语义信息。同时，通过式~(\ref{eq:locality_agg}) 和式~(\ref{eq:region_agg}) 的聚合可得到最终的局部区域嵌入和功能区嵌入，三层嵌入共同用于后续的蕴含约束和对比学习。
+\paragraph{步骤二：邻域聚合。} 在切空间中通过度归一化的消息传递聚合邻居特征：
+\begin{equation}
+    \bar{\mathbf{h}}_i = \sum_{j \in \mathcal{N}(i)} \frac{A_{ij}}{\text{deg}(i)} \tilde{\mathbf{h}}_j
+    \in \mathbb{R}^{n},
+    \label{eq:hgc_agg}
+\end{equation}
+其中 $\mathcal{N}(i) = \{j : A_{ij} > 0\}$，$\text{deg}(i) = \sum_j A_{ij}$。此聚合为切空间中的欧氏操作，计算高效且数值稳定。
+
+\paragraph{步骤三：线性变换。} 对聚合结果施加可学习的线性变换：
+\begin{equation}
+    \hat{\mathbf{h}}_i = \mathbf{W} \bar{\mathbf{h}}_i + \mathbf{b}
+    \in \mathbb{R}^{n},
+    \label{eq:hgc_linear}
+\end{equation}
+其中 $\mathbf{W} \in \mathbb{R}^{n \times n}$ 和 $\mathbf{b} \in \mathbb{R}^{n}$ 为可学习参数。
+
+\paragraph{步骤四：映射回流形。} 通过原点处的指数映射将变换后的切向量映射回双曲空间，并重投影以确保满足 Lorentz 约束：
+\begin{align}
+    \hat{\mathbf{h}}_i^{s} &= \exp_{\mathbf{o}}^{\kappa}(\hat{\mathbf{h}}_i)
+    = \frac{\tanh(\|\hat{\mathbf{h}}_i\|)}{\|\hat{\mathbf{h}}_i\|} \hat{\mathbf{h}}_i
+    \in \mathbb{R}^{n}, \label{eq:hgc_exp} \\[4pt]
+    \mathbf{h}_i' &= \text{Proj}_{\mathbb{L}}\!\left(\hat{\mathbf{h}}_i^{s}\right)
+    \in \mathbb{L}^{n}. \label{eq:hgc_proj}
+\end{align}
+其中 $\text{Proj}_{\mathbb{L}}(\cdot)$ 通过补全时间分量 $h_0 = \sqrt{1/\kappa + \|\mathbf{z}\|^2}$ 将空间分量投影回 Lorentz 流形。我们将式~(\ref{eq:hgc_log})--(\ref{eq:hgc_proj}) 的完整过程记为 $\text{HGC}(\mathbf{H}, \mathbf{A})$。
+
+\subsubsection{门控双曲插值}
+
+跨层分发步骤（R2C、C2S）中，节点需要融合自身嵌入 $\mathbf{h}$ 和来自父级的消息 $\mathbf{m}$。HHRoad 通过\textbf{门控双曲插值}实现这一融合。以 R2C 步骤为例，对局部区域 $c_j$，首先计算来自功能区的消息向量（引入自顶向下范数保持因子 $\rho' = 0.9$，高于自底向上的 $\rho = 0.8$，因为粗粒度信息在向细粒度传播时应更忠实地保持）：
+\begin{equation}
+    \mathbf{m}_{c_j}^{R} = \text{Proj}_{\mathbb{L}}\!\left(
+      \rho' \cdot \exp_{\mathbf{o}}^\kappa\!\left(
+        \sum_{k=1}^{|\mathcal{R}|} \frac{[\mathbf{A}_{CR}]_{jk}}{\sum_{k'} [\mathbf{A}_{CR}]_{jk'}}
+        \log_{\mathbf{o}}^\kappa(\mathbf{h}_{r_k}')
+      \right)^s
+    \right),
+    \label{eq:f2c_msg}
+\end{equation}
+其中 $\mathbf{h}_{r_k}'$ 为 R2R 步骤更新后的功能区嵌入。随后通过可学习门控机制融合原始局部区域嵌入与功能区消息：
+\begin{equation}
+    \mathbf{h}_{c_j} \leftarrow \exp_{\mathbf{h}_{c_j}}^\kappa\!\left(
+      g_{c_j} \cdot \log_{\mathbf{h}_{c_j}}^\kappa(\mathbf{m}_{c_j}^{R})
+    \right),
+    \label{eq:gate_loc}
+\end{equation}
+其中门控系数 $g_{c_j} = \sigma\!\left(\mathbf{w}_c^\top [\mathbf{h}_{c_j} \| \mathbf{m}_{c_j}^{R}] + b_c\right) \in (0,1)$ 由可学习参数 $\mathbf{w}_c$ 和 $b_c$ 控制。直觉上，对数映射 $\log_{\mathbf{h}_{c_j}}^\kappa(\mathbf{m}_{c_j}^{R})$ 计算从当前局部区域嵌入指向功能区消息的切向量方向，门控 $g_{c_j}$ 缩放该方向的步长，指数映射沿测地线移动缩放后的距离。
+
+C2S 步骤的操作与 R2C 类似，使用结构赋值矩阵 $\mathbf{A}_{SC}$ 和独立的门控参数：
+\begin{equation}
+    \mathbf{m}_{i}^{C} = \text{Proj}_{\mathbb{L}}\!\left(
+      \rho' \cdot \exp_{\mathbf{o}}^\kappa\!\left(
+        \sum_{j=1}^{|\mathcal{C}|} \frac{[\mathbf{A}_{SC}]_{ij}}{\sum_{j'} [\mathbf{A}_{SC}]_{ij'}}
+        \log_{\mathbf{o}}^\kappa(\mathbf{h}_{c_j}')
+      \right)^s
+    \right),
+    \label{eq:c2s_msg}
+\end{equation}
+\begin{equation}
+    \mathbf{h}_{i} \leftarrow \exp_{\mathbf{h}_{i}}^\kappa\!\left(
+      g_{i} \cdot \log_{\mathbf{h}_{i}}^\kappa(\mathbf{m}_{i}^{C})
+    \right),
+    \label{eq:gate_seg}
+\end{equation}
+其中 $g_{i} = \sigma\!\left(\mathbf{w}_s^\top [\mathbf{h}_{i} \| \mathbf{m}_{i}^{C}] + b_s\right)$，$\mathbf{h}_{c_j}'$ 为 C2C 步骤更新后的局部区域嵌入。
+
+经过两层层次消息传递编码器的堆叠（每层均执行完整的五步传播），我们将最终的路段嵌入记为 $\mathbf{H}^{\text{seg}} = \{\mathbf{h}_i\}_{i=1}^{|\mathcal{S}|}$，局部区域嵌入记为 $\mathbf{H}^{\text{loc}} = \{\mathbf{h}_{c_j}\}_{j=1}^{|\mathcal{C}|}$，功能区嵌入记为 $\mathbf{H}^{\text{reg}} = \{\mathbf{h}_{r_k}\}_{k=1}^{|\mathcal{R}|}$，三者均位于同一 Lorentz 空间 $\mathbb{L}^n$ 中。每条路段的嵌入融合了局部拓扑、所属局部区域和功能区的多层次语义信息。
+
+\subsection{输出表示}
+
+最终的路段表示通过拼接初始双曲特征 $\mathbf{h}_i^{(0)}$（来自双曲嵌入层）与经层次消息传递精炼后的路段嵌入 $\mathbf{h}_i$，并通过线性层投影至 $D_o$ 维欧氏向量：
+\begin{equation}
+    \mathbf{r}_i = \mathbf{W}_o [\mathbf{h}_i^{(0)} \| \mathbf{h}_i] + \mathbf{b}_o
+    \in \mathbb{R}^{D_o},
+    \label{eq:output}
+\end{equation}
+其中 $\mathbf{W}_o \in \mathbb{R}^{D_o \times 2(n+1)}$，$\mathbf{b}_o \in \mathbb{R}^{D_o}$。拼接初始嵌入的设计使模型在经过多层消息传递后仍能保留路段的原始属性信息，避免因过度平滑导致的信息损失。该欧氏输出可直接接入任意下游任务头。
+
+\subsection{学习目标}
+\label{sec:loss}
+
+HHRoad 的训练由三个互补的损失函数联合驱动。
+
+\subsubsection{道路功能分类损失}
+
+遵循 HRNR 的设置，使用道路功能分类任务作为主要监督信号。给定式~(\ref{eq:output}) 的输出表示 $\mathbf{r}_i$，分类损失采用标准交叉熵：
+\begin{equation}
+    \mathcal{L}_{\text{cls}} = -\frac{1}{|\mathcal{B}|} \sum_{i \in \mathcal{B}}
+    \log \frac{\exp(\mathbf{r}_i^\top \mathbf{w}_{y_i})}
+         {\sum_{c=1}^{C} \exp(\mathbf{r}_i^\top \mathbf{w}_{c})},
+    \label{eq:loss_cls}
+\end{equation}
+其中 $\mathcal{B}$ 为训练批次，$y_i$ 为路段 $v_i$ 的真实类别标签，$C$ 为道路类别总数。
+
+\subsubsection{蕴含锥损失}
+
+为在双曲空间中显式编码层次包含关系，HHRoad 引入\textbf{蕴含锥}机制\cite{ganea2018hyperbolic}。在双曲空间中任意一点 $\mathbf{x} \in \mathbb{L}^n$，蕴含锥由半孔径角定义：
+\begin{equation}
+    \theta(\mathbf{x}) = 2\arcsin\!\left(\frac{1}{\cosh\!\left(d_{\mathbb{L}}(\mathbf{x}, \mathbf{o})\right)}\right).
+    \label{eq:aperture}
+\end{equation}
+靠近原点 $\mathbf{o}$ 的点（功能区嵌入）具有较宽的孔径角，几何上可以"蕴含"更多子概念；远离原点的点（路段嵌入）具有较窄的孔径角，代表高度特定的概念。给定父级点 $\mathbf{x}$ 和候选子级点 $\mathbf{y}$，计算两者之间的夹角：
+\begin{equation}
+    \phi(\mathbf{x}, \mathbf{y}) = \arccos\!\left(
+      \frac{\langle \mathbf{x}, \mathbf{y} \rangle_{\mathcal{L}}}
+           {\|\mathbf{x}\|_{\mathcal{L}} \cdot \|\mathbf{y}\|_{\mathcal{L}}}
+    \right),
+    \label{eq:angle}
+\end{equation}
+并定义\textbf{蕴含分数}：
+\begin{equation}
+    s(\mathbf{x}, \mathbf{y}) = \theta(\mathbf{x}) - \phi(\mathbf{x}, \mathbf{y}).
+    \label{eq:entail_score}
+\end{equation}
+正的蕴含分数表示 $\mathbf{y}$ 落在 $\mathbf{x}$ 的蕴含锥内，即 $\mathbf{x}$ 蕴含 $\mathbf{y}$。
+
+HHRoad 对三类层次包含关系施加蕴含约束，对应路网层次结构：
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+    \item \textbf{功能区 $\Rightarrow$ 局部区域}：对每个功能区 $r_k$ 及其下属局部区域 $c_j$；
+    \item \textbf{局部区域 $\Rightarrow$ 路段}：对每个局部区域 $c_j$ 及其下属路段 $v_i$；
+    \item \textbf{路段 $\Leftrightarrow$ 路段}：对每对拓扑相邻的路段 $(v_i, v_j) \in \mathcal{E}$。
+\end{enumerate}
+蕴含损失通过铰链函数惩罚违反蕴含关系的情况：
+\begin{equation}
+    \mathcal{L}_{\text{CE}} = \frac{1}{|\mathcal{P}|}
+    \sum_{(\mathbf{x}, \mathbf{y}) \in \mathcal{P}}
+    \text{ReLU}\!\left(-s(\mathbf{x}, \mathbf{y})\right),
+    \label{eq:loss_ce}
+\end{equation}
+其中 $\mathcal{P}$ 为从上述三类关系中采样的所有父-子对集合。
+
+\subsubsection{层次对比损失}
+
+为进一步锐化嵌入空间的语义结构，HHRoad 在两个粒度上施加对比学习。
+
+\paragraph{路段层内对比学习。} 对每条采样边 $(v_i, v_j) \in \mathcal{E}$，以路段 $v_i$ 为锚点，拓扑相邻路段 $v_j$ 为正例，随机采样 $K$ 条路段为负例。相似度定义为 Lorentz 距离的负值，损失函数采用 InfoNCE 形式：
+\begin{equation}
+    \mathcal{L}_{\text{intra}} = -\frac{1}{|\mathcal{E}_s|}
+    \sum_{(i,j) \in \mathcal{E}_s}
+    \log \frac{
+      \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_i, \mathbf{h}_j) / \tau\right)
+    }{
+      \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_i, \mathbf{h}_j) / \tau\right)
+      + \sum_{k=1}^{K} \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_i, \mathbf{h}_{n_k}) / \tau\right)
+    },
+    \label{eq:loss_seg_cl}
+\end{equation}
+其中 $\mathcal{E}_s$ 为采样边集合，$\{n_k\}_{k=1}^K$ 为负样本，$\tau$ 为温度参数。
+
+\paragraph{跨层对比学习。} 对每个局部区域 $c_j$，将其与随机选取的下属路段 $v_i \in c_j$（正例）和 $K$ 条随机路段（负例）配对：
+\begin{equation}
+    \mathcal{L}_{\text{cross}} = -\frac{1}{|\mathcal{L}_c|}
+    \sum_{(c_j, i) \in \mathcal{L}_c}
+    \log \frac{
+      \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_{c_j}, \mathbf{h}_i) / \tau\right)
+    }{
+      \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_{c_j}, \mathbf{h}_i) / \tau\right)
+      + \sum_{k=1}^{K} \exp\!\left(-d_{\mathbb{L}}(\mathbf{h}_{c_j}, \mathbf{h}_{n_k}) / \tau\right)
+    }.
+    \label{eq:loss_cross_cl}
+\end{equation}
+组合对比损失为 $\mathcal{L}_{\text{CC}} = \mathcal{L}_{\text{intra}} + \mathcal{L}_{\text{cross}}$。
+
+\subsubsection{总训练目标}
+
+整体损失为三个分量的加权和：
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\text{cls}}
+    + \lambda_1 \mathcal{L}_{\text{CE}}
+    + \lambda_2 \mathcal{L}_{\text{CC}},
+    \label{eq:total_loss}
+\end{equation}
+其中 $\lambda_1$ 和 $\lambda_2$ 分别平衡蕴含损失和对比损失的贡献。整个模型以 Adam 优化器端到端训练，并采用梯度裁剪以防止双曲操作固有的数值不稳定性。
 
 \section{实验设计与结果分析}
 
